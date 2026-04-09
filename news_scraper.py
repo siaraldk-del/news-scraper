@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 KST = timezone(timedelta(hours=9))
 
 RSS_FEEDS = [
@@ -41,8 +41,8 @@ def fetch_rss(feed):
         print(f"[ERROR] {feed['name']}: {e}")
     return articles
 
-def gemini_summarize(articles):
-    if not GEMINI_API_KEY or not articles:
+def ai_summarize(articles):
+    if not GROQ_API_KEY or not articles:
         return ""
     titles = "\n".join([f"[{a['category']}] {a['title']}" for a in articles])
     prompt = f"""다음은 최신 뉴스 헤드라인 목록이야. 이걸 읽고:
@@ -63,22 +63,15 @@ def gemini_summarize(articles):
 {titles}"""
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        resp = requests.post(url, json={
-            "contents": [{"parts": [{"text": prompt}]}]
-        }, timeout=30)
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500},
+            timeout=30)
         data = resp.json()
-        print(f"[GEMINI RESPONSE] {json.dumps(data, ensure_ascii=False)[:500]}")
-        if "candidates" in data:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        elif "error" in data:
-            print(f"[GEMINI ERROR] {data['error']['message']}")
-            return ""
-        else:
-            print(f"[GEMINI UNKNOWN] {data}")
-            return ""
+        print(f"[GROQ RESPONSE] {json.dumps(data, ensure_ascii=False)[:500]}")
+        return data["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"[GEMINI ERROR] {e}")
+        print(f"[GROQ ERROR] {e}")
         return ""
 
 def send_telegram(text):
@@ -95,7 +88,7 @@ def main():
         print("새 뉴스 없음")
         return
 
-    summary = gemini_summarize(all_articles)
+    summary = ai_summarize(all_articles)
     if summary:
         ai_msg = f"🤖 <b>AI 뉴스 브리핑</b> | {now}\n{'━'*30}\n\n{summary}"
         send_telegram(ai_msg)
