@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
-SENT_FILE = "sent_news.json"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 KST = timezone(timedelta(hours=9))
 
 RSS_FEEDS = [
@@ -35,15 +35,49 @@ def fetch_rss(feed):
         for item in items[:5]:
             title_el = item.find("title")
             link_el = item.find("link")
+            desc_el = item.find("description")
             title = title_el.text.strip() if title_el is not None and title_el.text else ""
             link = link_el.text.strip() if link_el is not None and link_el.text else ""
+            desc = desc_el.text.strip() if desc_el is not None and desc_el.text else ""
             if not link and link_el is not None:
                 link = link_el.get("href", "")
             if title and link:
-                articles.append({"title": title, "link": link, "source": feed["name"], "category": feed["category"]})
+                articles.append({"title": title, "link": link, "desc": desc[:200], "source": feed["name"], "category": feed["category"]})
     except Exception as e:
         print(f"[ERROR] {feed['name']}: {e}")
     return articles
+
+def gemini_summarize(articles):
+    if not GEMINI_API_KEY or not articles:
+        return ""
+    titles = "\n".join([f"[{a['category']}] {a['title']}" for a in articles])
+    prompt = f"""다음은 최신 뉴스 헤드라인 목록이야. 이걸 읽고:
+1. 시장에 가장 영향이 큰 뉴스 TOP 3를 골라서 한 줄 요약
+2. 전체적인 시장 분위기를 한 줄로 정리
+3. 코인/선물 트레이더 관점에서 주의할 점 한 줄
+
+형식:
+🔥 TOP 3:
+1. (요약)
+2. (요약)
+3. (요약)
+
+📊 시장 분위기: (한 줄)
+⚠️ 트레이더 주의: (한 줄)
+
+뉴스 목록:
+{titles}"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        resp = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}]
+        }, timeout=30)
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        print(f"[GEMINI ERROR] {e}")
+        return ""
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -58,6 +92,15 @@ def main():
     if not all_articles:
         print("새 뉴스 없음")
         return
+
+    # AI 요약 먼저 전송
+    summary = gemini_summarize(all_articles)
+    if summary:
+        ai_msg = f"🤖 <b>AI 뉴스 브리핑</b> | {now}\n{'━'*30}\n\n{summary}"
+        send_telegram(ai_msg)
+        time.sleep(1)
+
+    # 뉴스 목록 전송
     msg = f"📰 <b>뉴스 스크랩</b> | {now}\n{'━'*30}\n\n"
     for art in all_articles:
         msg += f"• <a href=\"{art['link']}\">{art['title']}</a>\n  <i>{art['source']}</i>\n\n"
