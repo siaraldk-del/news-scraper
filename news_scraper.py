@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 import json
 import os
 import time
+import html
 from datetime import datetime, timezone, timedelta
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN", "")
@@ -36,6 +37,7 @@ def fetch_rss(feed):
             if not link and link_el is not None:
                 link = link_el.get("href", "")
             if title and link:
+                title = html.escape(title)
                 articles.append({"title": title, "link": link, "source": feed["name"], "category": feed["category"]})
     except Exception as e:
         print(f"[ERROR] {feed['name']}: {e}")
@@ -76,7 +78,13 @@ def ai_summarize(articles):
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=10)
+    try:
+        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=10)
+        if resp.status_code != 200:
+            print(f"[TG HTML FAIL] {resp.text[:200]}")
+            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": True}, timeout=10)
+    except Exception as e:
+        print(f"[TG ERROR] {e}")
 
 def main():
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
@@ -90,13 +98,13 @@ def main():
 
     summary = ai_summarize(all_articles)
     if summary:
-        ai_msg = f"🤖 <b>AI 뉴스 브리핑</b> | {now}\n{'━'*30}\n\n{summary}"
+        ai_msg = f"🤖 AI 뉴스 브리핑 | {now}\n{'━'*30}\n\n{summary}"
         send_telegram(ai_msg)
         time.sleep(1)
 
-    msg = f"📰 <b>뉴스 스크랩</b> | {now}\n{'━'*30}\n\n"
+    msg = f"📰 뉴스 스크랩 | {now}\n{'━'*30}\n\n"
     for art in all_articles:
-        msg += f"• <a href=\"{art['link']}\">{art['title']}</a>\n  <i>{art['source']}</i>\n\n"
+        msg += f"• {art['title']}\n  {art['source']} | {art['link']}\n\n"
         if len(msg) > 3800:
             send_telegram(msg)
             msg = ""
